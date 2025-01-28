@@ -1,66 +1,131 @@
 import streamlit as st
-import joblib
+import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, roc_curve, auc
 
-# Load the model and scaler
-model = joblib.load('fraud_detection_model.pkl')
-scaler = joblib.load('scaler.pkl')
+# Set page title and icon
+st.set_page_config(page_title="Fraud Detection App", page_icon="🕵️")
 
-# Streamlit app
+# Add a title and description
 st.title("Fraud Detection in Financial Transactions")
-st.write("""
-This app predicts whether a financial transaction is fraudulent or legitimate based on transaction details.
+st.markdown("""
+    This app detects fraudulent transactions using a machine learning model. 
+    Upload your dataset or use the sample dataset provided to see how it works!
 """)
 
-# Input fields for features
-st.header("Enter Transaction Details")
+# Sidebar for user inputs
+st.sidebar.header("User Input")
+uploaded_file = st.sidebar.file_uploader("Upload your CSV file", type=["csv"])
+use_sample_data = st.sidebar.checkbox("Use sample dataset", value=True)
 
-# Real-world inputs
-amount = st.number_input("Transaction Amount", value=0.0, min_value=0.0, step=0.01)
-time = st.number_input("Time of Transaction (in seconds since the first transaction)", value=0, min_value=0)
+# Load data
+@st.cache_data
+def load_data():
+    # Sample dataset (replace with your own dataset)
+    data = pd.read_csv('creditcard.csv')  # Ensure you have a sample dataset
+    return data
 
-# Anonymized features (V1-V28)
-st.subheader("Anonymized Features (V1-V28)")
-st.write("""
-These features are anonymized for privacy reasons. Enter values between -10 and 10.
-""")
+if uploaded_file is not None:
+    data = pd.read_csv(uploaded_file)
+elif use_sample_data:
+    data = load_data()
+else:
+    st.warning("Please upload a file or use the sample dataset.")
+    st.stop()
 
-input_data = []
-for i in range(1, 29):
-    input_data.append(st.number_input(f"V{i}", value=0.0, min_value=-10.0, max_value=10.0))
+# Display dataset
+st.subheader("Dataset Preview")
+st.write(data.head())
 
-# Preprocess the input data
-input_data = np.array(input_data).reshape(1, -1)
-amount_scaled = scaler.transform([[amount]])
+# Data preprocessing
+st.subheader("Data Preprocessing")
+st.write("Handling missing values and feature engineering...")
 
-# Combine features
-features = np.hstack((input_data, amount_scaled))
+# Example: Drop missing values and create a binary target column
+data = data.dropna()
+data['is_fraud'] = data['is_fraud'].astype(int)
 
-# Make prediction
+# Show class distribution
+st.write("Class Distribution (Fraud vs Non-Fraud):")
+fraud_counts = data['is_fraud'].value_counts()
+st.bar_chart(fraud_counts)
+
+# Feature selection
+features = data.drop(columns=['is_fraud'])
+target = data['is_fraud']
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.3, random_state=42)
+
+# Model training
+st.subheader("Model Training")
+st.write("Training a Random Forest Classifier...")
+
+model = RandomForestClassifier(random_state=42)
+model.fit(X_train, y_train)
+
+# Model evaluation
+st.subheader("Model Evaluation")
+y_pred = model.predict(X_test)
+y_pred_proba = model.predict_proba(X_test)[:, 1]
+
+# Confusion Matrix
+st.write("Confusion Matrix:")
+conf_matrix = confusion_matrix(y_test, y_pred)
+fig, ax = plt.subplots()
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', ax=ax)
+st.pyplot(fig)
+
+# Classification Report
+st.write("Classification Report:")
+st.text(classification_report(y_test, y_pred))
+
+# ROC Curve
+st.write("ROC Curve:")
+fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)
+roc_auc = auc(fpr, tpr)
+fig, ax = plt.subplots()
+ax.plot(fpr, tpr, label=f'AUC = {roc_auc:.2f}')
+ax.plot([0, 1], [0, 1], linestyle='--')
+ax.set_xlabel('False Positive Rate')
+ax.set_ylabel('True Positive Rate')
+ax.set_title('ROC Curve')
+ax.legend(loc='lower right')
+st.pyplot(fig)
+
+# Feature Importance
+st.subheader("Feature Importance")
+importances = model.feature_importances_
+feature_names = features.columns
+importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
+importance_df = importance_df.sort_values(by='Importance', ascending=False)
+st.bar_chart(importance_df.set_index('Feature'))
+
+# Prediction Interface
+st.subheader("Make Predictions")
+st.write("Enter transaction details to predict if it's fraudulent:")
+
+# Example input fields (customize based on your dataset)
+transaction_amount = st.number_input("Transaction Amount", min_value=0.0)
+transaction_time = st.number_input("Transaction Time (in hours)", min_value=0.0)
+user_balance = st.number_input("User Balance", min_value=0.0)
+
 if st.button("Predict"):
-    prediction = model.predict(features)
-    prediction_proba = model.predict_proba(features)
+    input_data = np.array([[transaction_amount, transaction_time, user_balance]])
+    prediction = model.predict(input_data)
+    prediction_proba = model.predict_proba(input_data)
 
-    st.subheader("Prediction Result")
     if prediction[0] == 1:
-        st.error("🚨 Fraudulent Transaction Detected!")
+        st.error("This transaction is predicted to be **fraudulent**.")
     else:
-        st.success("✅ Legitimate Transaction.")
+        st.success("This transaction is predicted to be **legitimate**.")
 
-    st.write(f"Probability of Fraud: {prediction_proba[0][1]:.2%}")
-    st.write(f"Probability of Legitimacy: {prediction_proba[0][0]:.2%}")
+    st.write(f"Prediction Probability: {prediction_proba[0][1]:.2f}")
 
-# Add instructions
-st.sidebar.header("Instructions")
-st.sidebar.write("""
-1. Enter the **Transaction Amount** and **Time**.
-2. For the anonymized features (V1-V28), enter values between -10 and 10.
-3. Click **Predict** to see the result.
-""")
-# Make prediction
-if st.button("Predict"):
-    prediction = model.predict(features)
-    if prediction[0] == 1:
-        st.error("Fraudulent Transaction Detected!")
-    else:
-        st.success("Legitimate Transaction.")
+# Footer
+st.markdown("---")
+st.markdown("Built with ❤️ using Streamlit")
